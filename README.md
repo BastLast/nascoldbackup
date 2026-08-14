@@ -77,7 +77,3 @@ fichiers `*.example` de [`coldbackup/`](coldbackup) pour la sauvegarde.
 
 Aucun secret n'est versionné : jetons et identifiants matériels vivent dans
 `/etc/default/`, en `chmod 600`.
-
-## Licence
-
-MIT
