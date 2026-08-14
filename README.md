@@ -16,6 +16,7 @@ branchement ──udev──▶ ssd-coldbackup ──▶ miroir rsync ──▶ 
 |---|---|
 | [`coldbackup/`](coldbackup) | Sauvegarde déclenchée au branchement, purge des anciennes copies |
 | [`notifier/`](notifier) | Notifications Discord en message privé, sans processus résident |
+| [`alerts/`](alerts) | Surveillance : collecte, regroupement et escalade des incidents |
 
 ## Pourquoi
 
@@ -23,6 +24,44 @@ Une sauvegarde froide manuelle n'est jamais faite. Celle-ci ne demande qu'un
 geste — brancher un disque — et se met elle-même hors tension pour inciter à le
 débrancher, ce qui est la seule chose qui la distingue d'une simple copie
 supplémentaire dans la même pièce.
+
+## Une alerte utile est une alerte rare
+
+Un canal de supervision meurt de deux façons : parce qu'il ne dit rien, ou parce
+qu'il en dit trop. La seconde est la plus fréquente — un service qui échoue
+toutes les 5 minutes produit 8 640 messages par mois, et l'on cesse alors de les
+lire.
+
+Les producteurs n'envoient donc **rien** directement : ils déposent un incident
+via `nas-alert`, et un examen quotidien décide seul de ce qui mérite attention.
+
+| Niveau | Sens | Acheminement |
+|---|---|---|
+| `critical` | agir maintenant | immédiat, au plus une fois par jour et par cause |
+| `warning` | à savoir | récapitulatif — **escalade si ça persiste** |
+| `info` | information | récapitulatif uniquement |
+
+**L'escalade se fonde sur la durée, pas sur le nombre.** Un échec toutes les
+5 minutes pendant une heure produit 12 occurrences mais peut déjà être résolu ;
+un échec quotidien pendant dix jours n'en produit que 10 et révèle un problème
+installé. Un `warning` encore actif dont la première occurrence remonte à plus
+de 7 jours devient donc urgent et sort sans attendre le récapitulatif.
+
+**Une cause qui ne se manifeste plus depuis 3 jours est tenue pour résolue.**
+Sans cette clôture, un incident réglé continuerait de peser sur les
+récapitulatifs — et finirait par escalader tout seul, ce qui serait absurde.
+
+**Le récapitulatif n'est émis que s'il a quelque chose à dire.** Tout va bien =
+aucun message. En régime normal, le système est silencieux.
+
+Sont couverts : l'échec de n'importe quelle unité systemd (via un modèle
+`OnFailure=`, qui vaut aussi pour les unités à venir), les sauvegardes trop
+anciennes, les dumps de base absents, les redémarrages inattendus et les disques
+remontés à chaud.
+
+Les contrôles d'**absence** méritent une mention à part : une sauvegarde qui n'a
+pas eu lieu ne produit aucun événement. Il faut aller la constater, ce qu'aucun
+`OnFailure` ne peut faire — d'où `nas-alert-checks`.
 
 ## Points de conception
 

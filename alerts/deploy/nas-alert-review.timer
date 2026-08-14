@@ -1,0 +1,11 @@
+[Unit]
+Description=Examen quotidien des incidents du NAS
+
+[Timer]
+OnCalendar=*-*-* 09:30
+# Rattrape l'examen si le NAS etait eteint a l'heure prevue.
+Persistent=true
+RandomizedDelaySec=15min
+
+[Install]
+WantedBy=timers.target

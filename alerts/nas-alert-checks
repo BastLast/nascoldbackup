@@ -1,0 +1,72 @@
+#!/bin/bash
+#
+# Verifications quotidiennes du NAS.
+#
+# Ces controles portent sur des ABSENCES : une sauvegarde qui n'a pas eu lieu,
+# un disque qu'on n'a pas branche, un instantane trop ancien. Une absence ne
+# produit aucun evenement -- il faut donc aller la constater, ce qu'aucun
+# OnFailure ne peut faire.
+#
+# Rien n'est envoye directement : tout passe par nas-alert, qui regroupe.
+
+set -uo pipefail
+
+ALERT=/usr/local/bin/nas-alert
+[ -x "$ALERT" ] || exit 0
+
+now=$(date +%s)
+age_days() { echo $(( (now - ${1:-0}) / 86400 )); }
+
+# --- Sauvegarde froide : le disque externe a-t-il ete branche recemment ? ----
+COLD_MAX_DAYS="${COLD_MAX_DAYS:-30}"
+cold_state=/var/lib/ssd-coldbackup/last-success
+if [ -r "$cold_state" ]; then
+    days=$(age_days "$(cat "$cold_state")")
+    if [ "$days" -ge "$COLD_MAX_DAYS" ]; then
+        "$ALERT" --key sauvegarde:froide --level warning \
+            --title "Sauvegarde froide ancienne de ${days} jours" \
+            --detail "Brancher le SSD externe : la copie hors ligne date de ${days} jours."
+    fi
+fi
+
+# --- Sauvegarde chaude restic ------------------------------------------------
+RESTIC_MAX_DAYS="${RESTIC_MAX_DAYS:-3}"
+last_restic=$(journalctl -t nas-backup --since "-30 days" --no-pager 2>/dev/null \
+    | grep -F 'sauvegarde terminee' | tail -1 | { read -r month day time _; \
+      date -d "$month $day $time" +%s 2>/dev/null || echo 0; })
+if [ "${last_restic:-0}" -gt 0 ]; then
+    days=$(age_days "$last_restic")
+    if [ "$days" -ge "$RESTIC_MAX_DAYS" ]; then
+        "$ALERT" --key sauvegarde:restic --level warning \
+            --title "Sauvegarde restic ancienne de ${days} jours" \
+            --detail "Aucune sauvegarde chaude reussie depuis ${days} jours (journalctl -t nas-backup)."
+    fi
+else
+    "$ALERT" --key sauvegarde:restic --level warning \
+        --title "Aucune trace de sauvegarde restic" \
+        --detail "Aucune sauvegarde reussie trouvee dans les journaux des 30 derniers jours."
+fi
+
+# --- Dump de la base Immich --------------------------------------------------
+# Ce sont ces dumps qui sont sauvegardes, pas le repertoire PostgreSQL vivant :
+# s'ils cessent, la base n'est plus protegee du tout.
+DUMP_MAX_DAYS="${DUMP_MAX_DAYS:-3}"
+dump_dir=/mnt/immich/immich/backups
+if findmnt -rno TARGET /mnt/immich >/dev/null 2>&1; then
+    newest=$(find "$dump_dir" -type f -name '*.sql*' -printf '%T@\n' 2>/dev/null \
+        | sort -rn | head -1 | cut -d. -f1)
+    if [ -z "${newest:-}" ]; then
+        "$ALERT" --key immich:dump --level warning \
+            --title "Aucun dump de la base Immich" \
+            --detail "Rien dans $dump_dir : la base n'est plus sauvegardee."
+    else
+        days=$(age_days "$newest")
+        if [ "$days" -ge "$DUMP_MAX_DAYS" ]; then
+            "$ALERT" --key immich:dump --level warning \
+                --title "Dump Immich ancien de ${days} jours" \
+                --detail "Le dernier dump exploitable de la base date de ${days} jours."
+        fi
+    fi
+fi
+
+exit 0

@@ -1,0 +1,10 @@
+[Unit]
+Description=Signale l'echec de %i
+# Sans cette exclusion, l'echec du signalement declencherait le signalement.
+OnFailure=
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/nas-alert --key systemd:%i --level warning \
+    --title "Unite en echec : %i" \
+    --detail "Consulter : journalctl -u %i"

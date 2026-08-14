@@ -1,0 +1,68 @@
+#!/bin/bash
+#
+# Collecte un incident du NAS. N'envoie (presque) jamais de notification.
+#
+#   nas-alert --key sauvegarde:restic --title "Sauvegarde restic en echec" \
+#             [--level info|warning|critical] [--detail "..."]
+#
+# Les incidents sont accumules et resumes par nas-alert-digest, qui n'emet
+# qu'un seul message periodique -- et rien du tout si tout va bien. Sans cette
+# agregation, une unite qui echoue toutes les 5 min produirait des milliers de
+# messages par mois, ce qui reviendrait a rendre le canal inutilisable.
+#
+# Seul le niveau "critical" sort immediatement, et au plus une fois par jour
+# et par cle : un boot loop en a deja produit 11 en 14 minutes par le passe.
+
+set -uo pipefail
+
+STATE_DIR=/var/lib/nas-alerts
+PENDING="$STATE_DIR/pending.tsv"
+COOLDOWN_DIR="$STATE_DIR/cooldown"
+CRITICAL_COOLDOWN_HOURS="${CRITICAL_COOLDOWN_HOURS:-24}"
+
+key=""
+level=warning
+title=""
+detail=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --key)    key=$2;    shift 2 ;;
+        --level)  level=$2;  shift 2 ;;
+        --title)  title=$2;  shift 2 ;;
+        --detail) detail=$2; shift 2 ;;
+        *) echo "option inconnue : $1" >&2; exit 2 ;;
+    esac
+done
+
+if [ -z "$key" ] || [ -z "$title" ]; then
+    echo "--key et --title sont obligatoires" >&2
+    exit 2
+fi
+
+mkdir -p "$STATE_DIR" "$COOLDOWN_DIR"
+
+# Le journal est en colonnes : tabulations et retours a la ligne sont neutralises.
+sanitize() { printf '%s' "${1:-}" | tr '\t\n' '  '; }
+
+printf '%s\t%s\t%s\t%s\t%s\n' \
+    "$(date +%s)" "$level" "$(sanitize "$key")" "$(sanitize "$title")" "$(sanitize "$detail")" \
+    >> "$PENDING"
+
+logger -t nas-alert -p daemon.warning -- "[$level] $key : $title"
+
+if [ "$level" = critical ]; then
+    marker="$COOLDOWN_DIR/$(printf '%s' "$key" | tr -c 'a-zA-Z0-9_.-' '_')"
+    now=$(date +%s)
+    last=$(cat "$marker" 2>/dev/null || echo 0)
+    if [ $(( (now - last) / 3600 )) -ge "$CRITICAL_COOLDOWN_HOURS" ]; then
+        echo "$now" > "$marker"
+        /usr/local/bin/nas-notify \
+            --level error \
+            --source "${key%%:*}" \
+            --title "$title" \
+            --description "${detail:-Anomalie critique detectee sur le NAS.}" || true
+    fi
+fi
+
+exit 0

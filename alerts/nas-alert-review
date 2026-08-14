@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+"""Examen quotidien des incidents du NAS.
+
+Trois responsabilites, dans cet ordre :
+
+1. **Cloture** des causes qui ne se manifestent plus : au-dela de RESOLVED_AFTER
+   sans nouvelle occurrence, l'incident est tenu pour resolu. Sans cela un
+   probleme regle continuerait a peser sur les recapitulatifs, et finirait meme
+   par escalader tout seul.
+
+2. **Escalade par persistance** : un `warning` encore actif dont la premiere
+   occurrence remonte a plus de ESCALATE_AFTER devient urgent et part
+   immediatement. La duree prime sur le nombre d'occurrences -- un echec toutes
+   les 5 min pendant une heure en produit 12 mais peut deja etre resolu, tandis
+   qu'un echec quotidien pendant dix jours n'en produit que 10 et revele un
+   probleme installe.
+
+3. **Recapitulatif periodique**, emis uniquement s'il reste quelque chose a
+   signaler. Tout va bien = aucun message.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import time
+from collections import OrderedDict
+from dataclasses import dataclass, field
+
+STATE_DIR = "/var/lib/nas-alerts"
+JOURNAL = os.path.join(STATE_DIR, "pending.tsv")
+ESCALATED = os.path.join(STATE_DIR, "escalated.json")
+LAST_DIGEST = os.path.join(STATE_DIR, "last-digest")
+
+DAY = 86400
+RESOLVED_AFTER = 3 * DAY
+ESCALATE_AFTER = 7 * DAY
+# Un probleme installe ne merite pas un rappel quotidien.
+ESCALATION_COOLDOWN = 7 * DAY
+DIGEST_INTERVAL = 30 * DAY
+JOURNAL_RETENTION = 90 * DAY
+MAX_FIELDS = 20
+
+LEVEL_ORDER = {"info": 0, "warning": 1, "critical": 2}
+
+
+@dataclass
+class Incident:
+    key: str
+    level: str = "info"
+    title: str = ""
+    detail: str = ""
+    count: int = 0
+    first_seen: int = 0
+    last_seen: int = 0
+    timestamps: list[int] = field(default_factory=list)
+
+    @property
+    def duration_days(self) -> int:
+        return (self.last_seen - self.first_seen) // DAY
+
+    def active(self, now: int) -> bool:
+        return now - self.last_seen <= RESOLVED_AFTER
+
+
+def notify(level: str, title: str, description: str, fields: list[tuple[str, str]]) -> None:
+    command = [
+        "/usr/local/bin/nas-notify",
+        "--level", level,
+        "--title", title,
+        "--description", description,
+        "--source", "surveillance",
+    ]
+    for name, value in fields:
+        command += ["--field", f"{name}={value}"]
+    subprocess.run(command, check=False)
+
+
+def read_journal() -> tuple[list[str], "OrderedDict[str, Incident]"]:
+    lines: list[str] = []
+    incidents: OrderedDict[str, Incident] = OrderedDict()
+    try:
+        with open(JOURNAL, encoding="utf-8") as handle:
+            lines = handle.readlines()
+    except FileNotFoundError:
+        return [], incidents
+
+    for line in lines:
+        parts = line.rstrip("\n").split("\t")
+        if len(parts) < 4:
+            continue
+        try:
+            stamp = int(parts[0])
+        except ValueError:
+            continue
+        level, key, title = parts[1], parts[2], parts[3]
+        detail = parts[4] if len(parts) > 4 else ""
+
+        incident = incidents.get(key)
+        if incident is None:
+            incident = Incident(key=key, first_seen=stamp)
+            incidents[key] = incident
+        incident.count += 1
+        incident.last_seen = max(incident.last_seen, stamp)
+        incident.first_seen = min(incident.first_seen, stamp)
+        incident.timestamps.append(stamp)
+        # Le libelle le plus recent fait foi, la gravite la plus forte l'emporte.
+        incident.title = title
+        incident.detail = detail
+        if LEVEL_ORDER.get(level, 0) >= LEVEL_ORDER.get(incident.level, 0):
+            incident.level = level
+    return lines, incidents
+
+
+def load_json(path: str) -> dict:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_json(path: str, payload: dict) -> None:
+    temporary = f"{path}.tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+    os.replace(temporary, path)
+
+
+def describe(incident: Incident) -> str:
+    if incident.count == 1:
+        return "1 fois"
+    days = incident.duration_days
+    if days >= 1:
+        return f"{incident.count} fois sur {days} jour(s)"
+    return f"{incident.count} fois"
+
+
+def escalate(incidents: dict[str, Incident], now: int) -> bool:
+    state = load_json(ESCALATED)
+    escalated_now = False
+
+    for incident in incidents.values():
+        if incident.level != "warning" or not incident.active(now):
+            continue
+        if now - incident.first_seen < ESCALATE_AFTER:
+            continue
+        if now - int(state.get(incident.key, 0)) < ESCALATION_COOLDOWN:
+            continue
+
+        state[incident.key] = now
+        escalated_now = True
+        notify(
+            "error",
+            f"Anomalie persistante : {incident.title}",
+            "Cette anomalie dure depuis plus d'une semaine et n'a pas cesse. "
+            "Elle demande une intervention.",
+            [
+                ("Depuis", f"{(now - incident.first_seen) // DAY} jour(s)"),
+                ("Occurrences", str(incident.count)),
+                ("Origine", incident.key),
+                ("Detail", incident.detail or "voir journalctl"),
+            ],
+        )
+
+    # Les cles resolues n'ont plus a occuper l'etat d'escalade.
+    for key in [k for k in state if k not in incidents]:
+        del state[key]
+    save_json(ESCALATED, state)
+    return escalated_now
+
+
+def digest(incidents: dict[str, Incident], now: int, forced: bool) -> bool:
+    try:
+        with open(LAST_DIGEST, encoding="utf-8") as handle:
+            last = int(handle.read().strip() or 0)
+    except (FileNotFoundError, ValueError):
+        last = 0
+
+    if not forced and now - last < DIGEST_INTERVAL:
+        return False
+
+    active = [i for i in incidents.values() if i.active(now)]
+    resolved = [i for i in incidents.values() if not i.active(now)]
+    if not active and not resolved:
+        # Rien a signaler : on n'envoie rien du tout, et on ne consomme pas
+        # l'intervalle -- le prochain incident sera resume sans attendre.
+        return False
+
+    active.sort(key=lambda i: (LEVEL_ORDER.get(i.level, 0), i.count), reverse=True)
+    fields = [(i.title[:80] or i.key, f"{describe(i)} · {i.key}") for i in active[:MAX_FIELDS]]
+
+    parts = []
+    if active:
+        parts.append(f"**{len(active)}** anomalie(s) en cours.")
+    if resolved:
+        parts.append(f"{len(resolved)} anomalie(s) ne se manifestent plus et sont considerees comme resolues.")
+    if not active:
+        parts.append("Rien ne requiert d'action.")
+
+    notify(
+        "warning" if active else "info",
+        "Recapitulatif du NAS",
+        " ".join(parts),
+        fields,
+    )
+    with open(LAST_DIGEST, "w", encoding="utf-8") as handle:
+        handle.write(str(now))
+    return True
+
+
+def compact(lines: list[str], now: int) -> None:
+    """Ne conserve que la fenetre utile : le journal ne doit pas croitre sans fin."""
+    kept = []
+    for line in lines:
+        parts = line.split("\t", 1)
+        try:
+            if now - int(parts[0]) <= JOURNAL_RETENTION:
+                kept.append(line)
+        except (ValueError, IndexError):
+            continue
+    if len(kept) != len(lines):
+        temporary = f"{JOURNAL}.tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            handle.writelines(kept)
+        os.replace(temporary, JOURNAL)
+
+
+def main() -> int:
+    now = int(time.time())
+    forced = "--digest" in sys.argv
+    os.makedirs(STATE_DIR, exist_ok=True)
+
+    lines, incidents = read_journal()
+    escalate(incidents, now)
+    digest(incidents, now, forced)
+    compact(lines, now)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

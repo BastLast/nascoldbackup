@@ -1,0 +1,15 @@
+[Unit]
+Description=Examen quotidien des incidents du NAS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/nas-alert-review
+ExecStartPost=/usr/local/bin/nas-alert-checks
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/nas-alerts /var/spool/nas-notify

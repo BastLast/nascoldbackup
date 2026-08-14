@@ -1,0 +1,24 @@
+#!/bin/bash
+#
+# Signale le demarrage du NAS.
+#
+# Un redemarrage inattendu revele une coupure secteur. En l'absence d'onduleur,
+# c'est le seul moyen d'en avoir connaissance : un episode de 11 redemarrages
+# en 14 minutes est deja survenu sans que rien ne le signale.
+#
+# L'incident est de niveau "warning" : un redemarrage isole n'a rien d'alarmant
+# et rejoint le recapitulatif. En revanche des redemarrages repetes sur
+# plusieurs jours declenchent l'escalade et sortent immediatement -- ce qui est
+# exactement la signature d'un boot loop.
+
+set -uo pipefail
+
+[ -x /usr/local/bin/nas-alert ] || exit 0
+
+/usr/local/bin/nas-alert \
+    --key systeme:demarrage \
+    --level warning \
+    --title "Le NAS a redemarre" \
+    --detail "Demarrage le $(date '+%d/%m a %H:%M'). Si ce redemarrage n'etait pas volontaire, suspecter une coupure secteur."
+
+exit 0

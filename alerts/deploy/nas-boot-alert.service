@@ -1,0 +1,11 @@
+[Unit]
+Description=Signale le demarrage du NAS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/nas-boot-alert
+
+[Install]
+WantedBy=multi-user.target
