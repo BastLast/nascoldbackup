@@ -17,6 +17,17 @@ ALERT=/usr/local/bin/nas-alert
 now=$(date +%s)
 age_days() { echo $(( (now - ${1:-0}) / 86400 )); }
 
+# --- Unites actuellement en echec --------------------------------------------
+# OnFailure ne se declenche qu'au MOMENT de l'echec : une unite tombee avant
+# l'installation de la surveillance, ou dont le signalement a echoue, resterait
+# invisible. On constate donc aussi l'etat present.
+failed=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | tr '\n' ' ')
+if [ -n "${failed// /}" ]; then
+    "$ALERT" --key systemd:etat-echec --level warning \
+        --title "Unité(s) en échec" \
+        --detail "En échec actuellement : ${failed}— relancer, ou effacer l'état avec systemctl reset-failed."
+fi
+
 # --- Sauvegarde froide : le disque externe a-t-il ete branche recemment ? ----
 COLD_MAX_DAYS="${COLD_MAX_DAYS:-30}"
 cold_state=/var/lib/ssd-coldbackup/last-success
