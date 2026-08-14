@@ -1,0 +1,12 @@
+[Unit]
+Description=Controles hebdomadaires de maintenance du NAS
+
+[Timer]
+OnCalendar=Sun 10:00
+# Rattrape le controle si le NAS etait eteint : ces retards se mesurent en
+# semaines, en manquer un fausserait la detection.
+Persistent=true
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target

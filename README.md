@@ -63,6 +63,30 @@ Les contrôles d'**absence** méritent une mention à part : une sauvegarde qui 
 pas eu lieu ne produit aucun événement. Il faut aller la constater, ce qu'aucun
 `OnFailure` ne peut faire — d'où `nas-alert-checks`.
 
+### Retards de maintenance
+
+`nas-alert-maintenance` (hebdomadaire) surveille ce qui se périme lentement :
+paquets en attente, redémarrage requis, conteneurs exclus des mises à jour
+automatiques, certificats TLS proches de l'expiration.
+
+Ces retards sortent en **`info`**, niveau qui n'escalade **jamais** : ce sont des
+choses à faire un jour, pas des incidents. Les seuils sont volontairement larges
+(45 jours pour les paquets, 120 pour une image de conteneur).
+
+Deux contrôles font exception et sortent en `warning`, car ils revèlent une
+protection qui a cessé d'opérer sans rien dire :
+
+- **une source de sauvegarde disparue** — restic ignore silencieusement un
+  chemin inexistant : la sauvegarde continue de réussir pendant que des données
+  ne sont plus protégées ;
+- **l'attribut immuable absent** d'un point de montage — sans lui, un disque non
+  monté laisse les services écrire sur le disque système, invisiblement.
+
+> ⚠️ Un contrôle doit chercher aux **deux** emplacements possibles quand un
+> logiciel peut être installé par paquet ou par snap. Ne regarder qu'un seul
+> endroit produit un contrôle qui ne teste rien et ne le dit pas — un faux
+> négatif silencieux est pire qu'un contrôle absent.
+
 ## Points de conception
 
 **Aucun processus résident.** Envoyer un message privé Discord ne demande que

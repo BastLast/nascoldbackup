@@ -1,0 +1,140 @@
+#!/bin/bash
+#
+# Controles de maintenance du NAS, hebdomadaires.
+#
+# Ces retards ne sont pas des incidents : ce sont des choses a faire un jour.
+# Ils sont donc emis en "info", niveau qui n'escalade jamais et n'apparait que
+# dans le recapitulatif periodique. Les seuils sont volontairement genereux.
+#
+# Deux exceptions passent en "warning", car elles compromettent silencieusement
+# la protection des donnees : une source de sauvegarde disparue et la protection
+# des points de montage absente.
+
+set -uo pipefail
+
+ALERT=/usr/local/bin/nas-alert
+[ -x "$ALERT" ] || exit 0
+
+SINCE_DIR=/var/lib/nas-alerts/since
+mkdir -p "$SINCE_DIR"
+
+now=$(date +%s)
+
+# Une condition n'a de sens que si elle dure. On memorise sa premiere
+# apparition et on renvoie son anciennete en jours.
+# $1 = cle
+sustained_days() {
+    local marker="$SINCE_DIR/$1"
+    [ -f "$marker" ] || date +%s > "$marker"
+    echo $(( (now - $(cat "$marker")) / 86400 ))
+}
+
+# $1 = cle. La condition a cesse : on oublie sa date d'apparition.
+clear_condition() { rm -f "$SINCE_DIR/$1"; }
+
+# --- Mises a jour de paquets en attente --------------------------------------
+APT_MAX_DAYS="${APT_MAX_DAYS:-45}"
+pending=$(apt list --upgradable 2>/dev/null | grep -c upgradable || true)
+if [ "${pending:-0}" -gt 0 ]; then
+    days=$(sustained_days apt-pending)
+    if [ "$days" -ge "$APT_MAX_DAYS" ]; then
+        "$ALERT" --key maintenance:paquets --level info \
+            --title "${pending} paquet(s) en attente de mise a jour" \
+            --detail "En attente depuis ${days} jours. Lancer : sudo apt update && sudo apt full-upgrade"
+    fi
+else
+    clear_condition apt-pending
+fi
+
+# --- Redemarrage requis ------------------------------------------------------
+REBOOT_MAX_DAYS="${REBOOT_MAX_DAYS:-21}"
+if [ -f /var/run/reboot-required ]; then
+    days=$(sustained_days reboot-required)
+    if [ "$days" -ge "$REBOOT_MAX_DAYS" ]; then
+        "$ALERT" --key maintenance:redemarrage --level info \
+            --title "Redemarrage en attente depuis ${days} jours" \
+            --detail "Une mise a jour (souvent le noyau) attend un redemarrage pour prendre effet."
+    fi
+else
+    clear_condition reboot-required
+fi
+
+# --- Images Docker jamais mises a jour ---------------------------------------
+# Ces conteneurs sont volontairement hors watchtower : leur mise a jour est
+# manuelle, donc facile a oublier.
+IMAGE_MAX_DAYS="${IMAGE_MAX_DAYS:-120}"
+MANUAL_CONTAINERS="${MANUAL_CONTAINERS:-gluetun-vpn immich_server immich_machine_learning wireguard open-webui-demo}"
+if command -v docker >/dev/null 2>&1; then
+    stale=""
+    for container in $MANUAL_CONTAINERS; do
+        created=$(docker inspect --format '{{.Created}}' "$container" 2>/dev/null) || continue
+        created_epoch=$(date -d "$created" +%s 2>/dev/null) || continue
+        age=$(( (now - created_epoch) / 86400 ))
+        [ "$age" -ge "$IMAGE_MAX_DAYS" ] && stale="$stale $container(${age}j)"
+    done
+    if [ -n "$stale" ]; then
+        "$ALERT" --key maintenance:images --level info \
+            --title "Conteneurs sur une image ancienne" \
+            --detail "Mise a jour manuelle (hors watchtower) :$stale"
+    fi
+fi
+
+# --- Sources de sauvegarde disparues -----------------------------------------
+# restic ignore silencieusement un chemin inexistant : la sauvegarde continue
+# de reussir pendant que des donnees ne sont plus protegees. Deja survenu.
+if [ -r /usr/local/bin/nas-backup.sh ]; then
+    missing=""
+    while read -r path; do
+        [ -e "$path" ] || missing="$missing $path"
+    done < <(sed -n '/^SOURCES=(/,/^)/p' /usr/local/bin/nas-backup.sh \
+        | grep -oE '^[[:space:]]+/[^ )]+' | tr -d '[:blank:]')
+    if [ -n "$missing" ]; then
+        "$ALERT" --key sauvegarde:sources --level warning \
+            --title "Source de sauvegarde introuvable" \
+            --detail "restic ignore ces chemins sans le signaler :$missing"
+    fi
+fi
+
+# --- Protection des points de montage ----------------------------------------
+# L'attribut immuable empeche d'ecrire sous un point de montage quand le disque
+# n'est pas monte. Il disparait a chaque reinstallation du disque systeme.
+CHECK_IMMUTABLE="${CHECK_IMMUTABLE:-1}"
+if [ "$CHECK_IMMUTABLE" = 1 ] && [ ! -e /mnt/rootview ]; then
+    if mkdir -p /mnt/rootview && mount --bind / /mnt/rootview 2>/dev/null; then
+        unprotected=""
+        for mountpoint in data plextwo random randomtwo images immich; do
+            target="/mnt/rootview/mnt/$mountpoint"
+            [ -d "$target" ] || continue
+            lsattr -d "$target" 2>/dev/null | grep -q '^....i' || unprotected="$unprotected $mountpoint"
+        done
+        umount /mnt/rootview 2>/dev/null
+        rmdir /mnt/rootview 2>/dev/null
+        if [ -n "$unprotected" ]; then
+            "$ALERT" --key protection:immuable --level warning \
+                --title "Points de montage non proteges" \
+                --detail "Sans chattr +i, un disque absent laisse ecrire sur le disque systeme :$unprotected"
+        fi
+    fi
+fi
+
+# --- Certificats TLS ---------------------------------------------------------
+# Deux emplacements possibles : paquet deb et snap. Ne chercher que dans le
+# premier donnerait un controle silencieusement inoperant sur une installation
+# par snap -- un faux negatif est pire qu'un controle absent.
+CERT_MIN_DAYS="${CERT_MIN_DAYS:-21}"
+for live in /etc/letsencrypt/live /var/snap/certbot/common/config/live; do
+    [ -d "$live" ] || continue
+    for cert in "$live"/*/cert.pem; do
+        [ -r "$cert" ] || continue
+        end=$(openssl x509 -enddate -noout -in "$cert" 2>/dev/null | cut -d= -f2)
+        end_epoch=$(date -d "$end" +%s 2>/dev/null) || continue
+        remaining=$(( (end_epoch - now) / 86400 ))
+        if [ "$remaining" -le "$CERT_MIN_DAYS" ]; then
+            "$ALERT" --key "maintenance:certificat" --level warning \
+                --title "Certificat TLS expire dans ${remaining} jours" \
+                --detail "$(dirname "$cert") : verifier le renouvellement automatique."
+        fi
+    done
+done
+
+exit 0
