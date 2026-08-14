@@ -37,8 +37,12 @@ LAST_DIGEST = os.path.join(STATE_DIR, "last-digest")
 DAY = 86400
 RESOLVED_AFTER = 3 * DAY
 ESCALATE_AFTER = 7 * DAY
-# Un probleme installe ne merite pas un rappel quotidien.
+# Un probleme installe ne merite pas un rappel quotidien. L'intervalle entre
+# deux relances double a chaque fois : insistant d'abord, puis on considere que
+# le message est passe. Sans ce recul, une anomalie non traitee produirait un
+# rappel toutes les semaines indefiniment -- 23 messages en 200 jours, mesure.
 ESCALATION_COOLDOWN = 7 * DAY
+ESCALATION_COOLDOWN_MAX = 30 * DAY
 DIGEST_INTERVAL = 30 * DAY
 JOURNAL_RETENTION = 90 * DAY
 MAX_FIELDS = 20
@@ -122,12 +126,14 @@ def read_journal() -> tuple[list[str], "OrderedDict[str, Incident]"]:
             incident = Incident(key=key, first_seen=stamp)
             incidents[key] = incident
         incident.count += 1
-        incident.last_seen = max(incident.last_seen, stamp)
         incident.first_seen = min(incident.first_seen, stamp)
+        # Le libelle du dernier evenement fait foi : c'est lui qui porte l'etat
+        # courant ("ancienne de 198 jours" et non "de 30 jours").
+        if stamp >= incident.last_seen:
+            incident.title = title
+            incident.detail = detail
+        incident.last_seen = max(incident.last_seen, stamp)
         incident.timestamps.append(stamp)
-        # Le libelle le plus recent fait foi, la gravite la plus forte l'emporte.
-        incident.title = title
-        incident.detail = detail
         if LEVEL_ORDER.get(level, 0) >= LEVEL_ORDER.get(incident.level, 0):
             incident.level = level
     return lines, incidents
@@ -166,10 +172,19 @@ def escalate(incidents: dict[str, Incident], now: int) -> bool:
             continue
         if now - incident.first_seen < ESCALATE_AFTER:
             continue
-        if now - int(state.get(incident.key, 0)) < ESCALATION_COOLDOWN:
+
+        # Ancien format : un simple horodatage. On le lit encore.
+        previous = state.get(incident.key)
+        if isinstance(previous, dict):
+            last_at, sent = int(previous.get("at", 0)), int(previous.get("count", 0))
+        else:
+            last_at, sent = int(previous or 0), 1 if previous else 0
+
+        cooldown = min(ESCALATION_COOLDOWN * (2 ** max(sent - 1, 0)), ESCALATION_COOLDOWN_MAX)
+        if sent and now - last_at < cooldown:
             continue
 
-        state[incident.key] = now
+        state[incident.key] = {"at": now, "count": sent + 1}
         escalated_now = True
         days = (now - incident.first_seen) // DAY
         lines = [
@@ -264,7 +279,10 @@ def compact(lines: list[str], now: int) -> None:
 
 
 def main() -> int:
-    now = int(time.time())
+    # Horloge injectable : sans cela le comportement temporel (cooldowns,
+    # escalade, intervalle du recapitulatif) ne serait pas testable autrement
+    # qu'en attendant des semaines.
+    now = int(os.environ.get("NAS_ALERT_NOW") or time.time())
     forced = "--digest" in sys.argv
     os.makedirs(STATE_DIR, exist_ok=True)
 
