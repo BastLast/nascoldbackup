@@ -1,0 +1,4 @@
+#!/bin/sh
+# Lanceur du client de notification. Le code compile vit dans /opt ; ce
+# lanceur donne un point d'entree stable dans le PATH pour les scripts systeme.
+exec /usr/bin/node /opt/nas-discord-notifier/dist/cli.js "$@"

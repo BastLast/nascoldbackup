@@ -1,0 +1,20 @@
+{
+  "name": "nas-discord-notifier",
+  "version": "2.0.0",
+  "description": "Notifications du NAS en message prive Discord, sans processus resident",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "nas-notify": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "lint": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

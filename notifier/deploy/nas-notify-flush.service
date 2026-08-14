@@ -1,0 +1,17 @@
+[Unit]
+Description=Reemission des notifications NAS en attente
+Documentation=https://github.com/BastLast/nas-discord-notifier
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/nas-notify --flush
+
+# Le jeton Discord est lu dans /etc/default/nas-notify, accessible au seul root.
+User=root
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/spool/nas-notify

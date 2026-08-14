@@ -1,0 +1,19 @@
+# Lance la sauvegarde froide des que le disque externe est branche.
+#
+# Deploye vers /etc/udev/rules.d/99-ssd-coldbackup.rules apres avoir renseigne
+# les deux identifiants ci-dessous. Les relever une fois le disque branche :
+#
+#   udevadm info -q property -n /dev/sdX1 | grep -E 'ID_SERIAL_SHORT|ID_FS_UUID'
+#
+# CRITIQUE : uniquement "systemctl --no-block", jamais un mount direct. Une
+# commande synchrone dans une regle udev bloque l'udev-worker et empeche les
+# unites .device de s'activer, ce qui fait echouer local-fs.target au boot et
+# renvoie la machine en mode maintenance.
+#
+# Le disque est identifie par son numero de serie ET l'UUID de sa partition :
+# un UUID exFAT ne fait que 32 bits, trop court pour etre unique a lui seul.
+
+ACTION=="add", SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", \
+    ENV{ID_SERIAL_SHORT}=="REMPLACER_PAR_LE_NUMERO_DE_SERIE", \
+    ENV{ID_FS_UUID}=="REMPLACER_PAR_L_UUID", \
+    RUN+="/usr/bin/systemctl --no-block start ssd-coldbackup.service"

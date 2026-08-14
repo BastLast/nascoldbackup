@@ -1,0 +1,22 @@
+# Deploye vers /etc/default/ssd-coldbackup (chmod 600, root).
+
+# Identifiant de la partition du disque de sauvegarde.
+# Le relever avec :  lsblk -o NAME,FSTYPE,LABEL,UUID
+SSD_UUID=
+
+MOUNTPOINT=/mnt/coldbackup
+DEST_SUBDIR=nas-backup
+
+# Un rebranchement dans cet intervalle ne relance pas la sauvegarde.
+MIN_INTERVAL_HOURS=6
+
+# Nombre d'archives de configuration conservees sur le disque.
+KEEP_CONFIG_ARCHIVES=7
+
+# En dessous de ce seuil, la sauvegarde refuse de commencer plutot que de
+# remplir le disque et d'echouer a mi-parcours.
+MIN_FREE_GB=20
+
+# Points d'etape pendant les sauvegardes longues (en minutes).
+PROGRESS_FIRST_DELAY_MIN=5
+PROGRESS_INTERVAL_MIN=10

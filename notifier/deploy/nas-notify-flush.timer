@@ -1,0 +1,13 @@
+[Unit]
+Description=Reprise periodique des notifications NAS en attente
+
+[Timer]
+# Rattrape les notifications emises pendant une coupure reseau.
+OnBootSec=2min
+OnUnitActiveSec=5min
+# Sans cela, une notification deposee pendant un arret du NAS attendrait le
+# prochain cycle complet au lieu de partir des le demarrage.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

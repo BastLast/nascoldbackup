@@ -1,0 +1,19 @@
+[Unit]
+Description=Sauvegarde froide du NAS sur le SSD externe
+Documentation=man:ssd-coldbackup
+ConditionPathIsMountPoint=/mnt/immich
+ConditionPathIsMountPoint=/mnt/data
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ssd-coldbackup.sh
+Environment=HOME=/root
+# Un miroir de 360 Go peut durer de 15 min (USB 3) a plusieurs heures (USB 2).
+TimeoutStartSec=0
+# Laisse au script le temps de demonter proprement avant le SIGKILL : sur exFAT,
+# non journalise, une ecriture interrompue corrompt le systeme de fichiers.
+TimeoutStopSec=180
+KillSignal=SIGTERM
+# Ne doit gener ni Jellyfin ni Immich.
+IOSchedulingClass=idle
+Nice=10
