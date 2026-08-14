@@ -18,7 +18,7 @@ set -uo pipefail
 /usr/local/bin/nas-alert \
     --key systeme:demarrage \
     --level warning \
-    --title "Le NAS a redemarre" \
-    --detail "Demarrage le $(date '+%d/%m a %H:%M'). Si ce redemarrage n'etait pas volontaire, suspecter une coupure secteur."
+    --title "Le NAS a redémarré" \
+    --detail "Démarrage le $(date '+%d/%m à %H:%M'). Si ce redémarrage n'était pas volontaire, suspecter une coupure secteur."
 
 exit 0

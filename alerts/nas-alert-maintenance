@@ -39,7 +39,7 @@ if [ "${pending:-0}" -gt 0 ]; then
     days=$(sustained_days apt-pending)
     if [ "$days" -ge "$APT_MAX_DAYS" ]; then
         "$ALERT" --key maintenance:paquets --level info \
-            --title "${pending} paquet(s) en attente de mise a jour" \
+            --title "${pending} paquet(s) en attente de mise à jour" \
             --detail "En attente depuis ${days} jours. Lancer : sudo apt update && sudo apt full-upgrade"
     fi
 else
@@ -52,8 +52,8 @@ if [ -f /var/run/reboot-required ]; then
     days=$(sustained_days reboot-required)
     if [ "$days" -ge "$REBOOT_MAX_DAYS" ]; then
         "$ALERT" --key maintenance:redemarrage --level info \
-            --title "Redemarrage en attente depuis ${days} jours" \
-            --detail "Une mise a jour (souvent le noyau) attend un redemarrage pour prendre effet."
+            --title "Redémarrage en attente depuis ${days} jours" \
+            --detail "Une mise à jour (souvent le noyau) attend un redémarrage pour prendre effet."
     fi
 else
     clear_condition reboot-required
@@ -75,7 +75,7 @@ if command -v docker >/dev/null 2>&1; then
     if [ -n "$stale" ]; then
         "$ALERT" --key maintenance:images --level info \
             --title "Conteneurs sur une image ancienne" \
-            --detail "Mise a jour manuelle (hors watchtower) :$stale"
+            --detail "Mise à jour manuelle (hors watchtower) :$stale"
     fi
 fi
 
@@ -111,8 +111,8 @@ if [ "$CHECK_IMMUTABLE" = 1 ] && [ ! -e /mnt/rootview ]; then
         rmdir /mnt/rootview 2>/dev/null
         if [ -n "$unprotected" ]; then
             "$ALERT" --key protection:immuable --level warning \
-                --title "Points de montage non proteges" \
-                --detail "Sans chattr +i, un disque absent laisse ecrire sur le disque systeme :$unprotected"
+                --title "Points de montage non protégés" \
+                --detail "Sans chattr +i, un disque absent laisse écrire sur le disque système :$unprotected"
         fi
     fi
 fi

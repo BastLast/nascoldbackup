@@ -39,12 +39,12 @@ if [ "${last_restic:-0}" -gt 0 ]; then
     if [ "$days" -ge "$RESTIC_MAX_DAYS" ]; then
         "$ALERT" --key sauvegarde:restic --level warning \
             --title "Sauvegarde restic ancienne de ${days} jours" \
-            --detail "Aucune sauvegarde chaude reussie depuis ${days} jours (journalctl -t nas-backup)."
+            --detail "Aucune sauvegarde chaude réussie depuis ${days} jours (journalctl -t nas-backup)."
     fi
 else
     "$ALERT" --key sauvegarde:restic --level warning \
         --title "Aucune trace de sauvegarde restic" \
-        --detail "Aucune sauvegarde reussie trouvee dans les journaux des 30 derniers jours."
+        --detail "Aucune sauvegarde réussie trouvée dans les journaux des 30 derniers jours."
 fi
 
 # --- Dump de la base Immich --------------------------------------------------
@@ -58,7 +58,7 @@ if findmnt -rno TARGET /mnt/immich >/dev/null 2>&1; then
     if [ -z "${newest:-}" ]; then
         "$ALERT" --key immich:dump --level warning \
             --title "Aucun dump de la base Immich" \
-            --detail "Rien dans $dump_dir : la base n'est plus sauvegardee."
+            --detail "Rien dans $dump_dir : la base n'est plus sauvegardée."
     else
         days=$(age_days "$newest")
         if [ "$days" -ge "$DUMP_MAX_DAYS" ]; then

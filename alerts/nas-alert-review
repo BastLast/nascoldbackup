@@ -45,6 +45,12 @@ MAX_FIELDS = 20
 
 LEVEL_ORDER = {"info": 0, "warning": 1, "critical": 2}
 
+# La description d'un embed accepte le markdown : une liste hierarchisee y est
+# bien plus lisible qu'une grille de champs "inline", qui se tasse sur trois
+# colonnes et noie l'essentiel sous les details techniques.
+LEVEL_MARK = {"info": "·", "warning": "▸", "critical": "▸"}
+DESCRIPTION_LIMIT = 3800
+
 
 @dataclass
 class Incident:
@@ -65,17 +71,30 @@ class Incident:
         return now - self.last_seen <= RESOLVED_AFTER
 
 
-def notify(level: str, title: str, description: str, fields: list[tuple[str, str]]) -> None:
+def notify(
+    level: str,
+    title: str,
+    description: str,
+    fields: list[tuple[str, str]] | None = None,
+) -> None:
     command = [
         "/usr/local/bin/nas-notify",
         "--level", level,
         "--title", title,
-        "--description", description,
+        "--description", description[:DESCRIPTION_LIMIT],
         "--source", "surveillance",
     ]
-    for name, value in fields:
+    for name, value in fields or []:
         command += ["--field", f"{name}={value}"]
     subprocess.run(command, check=False)
+
+
+def human_delay(seconds: int) -> str:
+    if seconds < 3600:
+        return "a l'instant"
+    if seconds < DAY:
+        return f"il y a {seconds // 3600} h"
+    return f"il y a {seconds // DAY} j"
 
 
 def read_journal() -> tuple[list[str], "OrderedDict[str, Incident]"]:
@@ -129,14 +148,14 @@ def save_json(path: str, payload: dict) -> None:
     os.replace(temporary, path)
 
 
-def describe(incident: Incident) -> str:
-    if incident.count == 1:
-        return "1 fois"
-    days = incident.duration_days
-    if days >= 1:
-        return f"{incident.count} fois sur {days} jour(s)"
-    return f"{incident.count} fois"
-
+def describe(incident: Incident, now: int) -> str:
+    """Ligne de contexte : combien de fois, sur quelle duree, quand en dernier."""
+    parts = []
+    if incident.count > 1:
+        days = incident.duration_days
+        parts.append(f"{incident.count} fois sur {days} j" if days >= 1 else f"{incident.count} fois")
+    parts.append(human_delay(now - incident.last_seen))
+    return " · ".join(parts)
 
 def escalate(incidents: dict[str, Incident], now: int) -> bool:
     state = load_json(ESCALATED)
@@ -152,18 +171,15 @@ def escalate(incidents: dict[str, Incident], now: int) -> bool:
 
         state[incident.key] = now
         escalated_now = True
-        notify(
-            "error",
-            f"Anomalie persistante : {incident.title}",
-            "Cette anomalie dure depuis plus d'une semaine et n'a pas cesse. "
-            "Elle demande une intervention.",
-            [
-                ("Depuis", f"{(now - incident.first_seen) // DAY} jour(s)"),
-                ("Occurrences", str(incident.count)),
-                ("Origine", incident.key),
-                ("Detail", incident.detail or "voir journalctl"),
-            ],
-        )
+        days = (now - incident.first_seen) // DAY
+        lines = [
+            f"**Dure depuis {days} jours sans discontinuer.** Une intervention est nécessaire.",
+            "",
+            f"Signalée {incident.count} fois, la dernière {human_delay(now - incident.last_seen)}.",
+        ]
+        if incident.detail:
+            lines += ["", incident.detail]
+        notify("error", incident.title, "\n".join(lines))
 
     # Les cles resolues n'ont plus a occuper l'etat d'escalade.
     for key in [k for k in state if k not in incidents]:
@@ -189,22 +205,41 @@ def digest(incidents: dict[str, Incident], now: int, forced: bool) -> bool:
         # l'intervalle -- le prochain incident sera resume sans attendre.
         return False
 
-    active.sort(key=lambda i: (LEVEL_ORDER.get(i.level, 0), i.count), reverse=True)
-    fields = [(i.title[:80] or i.key, f"{describe(i)} · {i.key}") for i in active[:MAX_FIELDS]]
+    # Trie par anciennete : une anomalie installee depuis onze jours prime sur
+    # une rafale d'une heure, meme si celle-ci compte plus d'occurrences.
+    active.sort(key=lambda i: (LEVEL_ORDER.get(i.level, 0), -i.first_seen), reverse=True)
 
-    parts = []
+    lines: list[str] = []
     if active:
-        parts.append(f"**{len(active)}** anomalie(s) en cours.")
+        attention = [i for i in active if i.level != "info"]
+        pending = [i for i in active if i.level == "info"]
+
+        if attention:
+            lines.append("**À regarder**")
+            for incident in attention:
+                lines.append(f"{LEVEL_MARK.get(incident.level, '·')} **{incident.title}**")
+                lines.append(f"　{describe(incident, now)}")
+            lines.append("")
+
+        if pending:
+            lines.append("**En attente, sans urgence**")
+            for incident in pending:
+                lines.append(f"· {incident.title}")
+            lines.append("")
+
     if resolved:
-        parts.append(f"{len(resolved)} anomalie(s) ne se manifestent plus et sont considerees comme resolues.")
+        if len(resolved) == 1:
+            lines.append("*1 anomalie ne se manifeste plus : considérée comme résolue.*")
+        else:
+            lines.append(f"*{len(resolved)} anomalies ne se manifestent plus : considérées comme résolues.*")
+
     if not active:
-        parts.append("Rien ne requiert d'action.")
+        lines.append("Rien ne requiert d'action.")
 
     notify(
-        "warning" if active else "info",
-        "Recapitulatif du NAS",
-        " ".join(parts),
-        fields,
+        "warning" if any(i.level != "info" for i in active) else "info",
+        "Récapitulatif du NAS",
+        "\n".join(lines).strip(),
     )
     with open(LAST_DIGEST, "w", encoding="utf-8") as handle:
         handle.write(str(now))
